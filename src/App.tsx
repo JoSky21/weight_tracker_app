@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, type Timestamp } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, deleteField, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, type Timestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import WeightChart, { type WeightPoint } from './WeightChart';
 
@@ -15,6 +15,15 @@ type Workout = {
   createdAt?: Timestamp;
 };
 type WeightEntry = WeightPoint & { notes?: string; createdAt?: Timestamp };
+type WorkoutDraft = {
+  id: string;
+  date: string;
+  type: string;
+  minutes: string;
+  distance: string;
+  exertion: string;
+  notes: string;
+};
 type Tab = 'workouts' | 'weight';
 
 const STARTING_REFERENCE_LB = 235;
@@ -42,6 +51,12 @@ export default function App() {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // Editing a workout doesn't overwrite an unfinished new-workout form.
+  const [editingWorkout, setEditingWorkout] = useState<WorkoutDraft | null>(null);
+  const [workoutActionBusy, setWorkoutActionBusy] = useState(false);
+  const [workoutActionError, setWorkoutActionError] = useState('');
+  const [workoutActionNotice, setWorkoutActionNotice] = useState('');
 
   // New weight form state.
   const [weightDate, setWeightDate] = useState(today());
@@ -112,6 +127,83 @@ export default function App() {
     } catch(e) { setError(e instanceof Error ? e.message : 'Save failed'); }
     finally { setBusy(false); }
   }
+  function beginWorkoutEdit(workout: Workout) {
+    if (workoutActionBusy) return;
+    setWorkoutActionError('');
+    setWorkoutActionNotice('');
+    setEditingWorkout({
+      id: workout.id,
+      date: workout.date,
+      type: workout.type,
+      minutes: String(workout.minutes),
+      distance: workout.distanceMiles == null ? '' : String(workout.distanceMiles),
+      exertion: String(workout.exertion ?? 4),
+      notes: workout.notes ?? ''
+    });
+  }
+  function cancelWorkoutEdit() {
+    if (workoutActionBusy) return;
+    setEditingWorkout(null);
+    setWorkoutActionError('');
+  }
+  async function saveWorkoutEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!user || !editingWorkout || workoutActionBusy) return;
+    const draft = editingWorkout;
+    setWorkoutActionError('');
+    setWorkoutActionNotice('');
+    setWorkoutActionBusy(true);
+    try {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.date)) throw new Error('Enter a valid workout date.');
+      if (!draft.type.trim()) throw new Error('Select an activity.');
+      const duration = Number(draft.minutes);
+      if (!Number.isInteger(duration) || duration < 1 || duration > 1440) {
+        throw new Error('Enter a duration between 1 and 1440 minutes.');
+      }
+      const effort = Number(draft.exertion);
+      if (!Number.isInteger(effort) || effort < 1 || effort > 10) {
+        throw new Error('Choose an effort level from 1 to 10.');
+      }
+      const dist = draft.distance.trim() === '' ? undefined : Number(draft.distance);
+      if (dist !== undefined && (!Number.isFinite(dist) || dist < 0)) {
+        throw new Error('Enter a valid distance or leave it blank.');
+      }
+      await updateDoc(doc(db, 'users', user.uid, 'workouts', draft.id), {
+        date: draft.date,
+        type: draft.type,
+        minutes: duration,
+        distanceMiles: dist === undefined ? deleteField() : dist,
+        exertion: effort,
+        notes: draft.notes.trim()
+      });
+      setEditingWorkout(null);
+      setWorkoutActionNotice('Workout updated and synced.');
+    } catch (e) {
+      setWorkoutActionError(e instanceof Error ? e.message : 'Unable to update workout.');
+    } finally {
+      setWorkoutActionBusy(false);
+    }
+  }
+  async function removeWorkout(workout: Workout) {
+    if (!user || workoutActionBusy) return;
+    const confirmed = window.confirm(
+      `Delete ${workout.type} on ${workout.date} (${workout.minutes} min)? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setWorkoutActionError('');
+    setWorkoutActionNotice('');
+    setWorkoutActionBusy(true);
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'workouts', workout.id));
+      if (editingWorkout?.id === workout.id) setEditingWorkout(null);
+      setWorkoutActionNotice('Workout deleted. Your statistics will update automatically.');
+    } catch (e) {
+      setWorkoutActionError(e instanceof Error ? e.message : 'Unable to delete workout.');
+    } finally {
+      setWorkoutActionBusy(false);
+    }
+  }
+
   async function saveWeight(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!user) return;
     setWeightError(''); setWeightNotice(''); setWeightBusy(true);
@@ -160,7 +252,52 @@ export default function App() {
     {tab === 'workouts' ? <div role="tabpanel" id="workouts-panel" aria-labelledby="workouts-tab">
       <section className="metrics"><div className="panel"><div className="muted">This week's movement</div><strong>{totalMinutes} min</strong><div className="muted small">A rest day is part of the plan.</div></div><div className="panel"><div className="muted">Workouts recorded</div><strong>{workouts.length}</strong><div className="muted small">Every manageable session counts.</div></div></section>
       <section className="panel"><h2>Log a workout</h2><form onSubmit={save} className="form-grid"><label>Date<input type="date" value={date} onChange={e=>setDate(e.target.value)} required /></label><label>Activity<select value={type} onChange={e=>setType(e.target.value)}>{types.map(t=><option key={t}>{t}</option>)}</select></label><label>Minutes<input type="number" min="1" max="1440" value={minutes} onChange={e=>setMinutes(e.target.value)} required /></label><label>Distance (miles, optional)<input type="number" step="0.01" min="0" value={distance} onChange={e=>setDistance(e.target.value)} /></label><label>Effort (1 = easy, 10 = maximal)<input type="range" min="1" max="10" value={exertion} onChange={e=>setExertion(e.target.value)} /> <span>{exertion}/10</span></label><label className="full">Notes<textarea rows={3} placeholder="Breathing, calves, recovery, how it felt…" value={notes} onChange={e=>setNotes(e.target.value)} /></label><button disabled={busy}>Save workout</button></form>{error && <p className="error" role="alert">{error}</p>}</section>
-      <section className="panel"><h2>Workout history</h2>{workouts.length===0 ? <p className="muted">No workouts yet. Your first entry will appear here on both devices.</p> : <div className="entries">{workouts.map(w=><article className="entry" key={w.id}><div><strong>{w.type}</strong><div className="muted small">{w.date} · {w.minutes} min{w.distanceMiles != null ? ` · ${w.distanceMiles} mi` : ''} · effort {w.exertion ?? '—'}/10</div>{w.notes && <p>{w.notes}</p>}</div></article>)}</div>}</section>
+      <section className="panel">
+        <h2>Workout history</h2>
+        {workoutActionNotice && <p className="notice" role="status">{workoutActionNotice}</p>}
+        {workoutActionError && <p className="error" role="alert">{workoutActionError}</p>}
+        {workouts.length === 0
+          ? <p className="muted">No workouts yet. Your first entry will appear here on both devices.</p>
+          : <div className="entries">{workouts.map(w => <article className="entry workout-entry" key={w.id}>
+              <div className="entry-header">
+                <div>
+                  <strong>{w.type}</strong>
+                  <div className="muted small">{w.date} · {w.minutes} min{w.distanceMiles != null ? ` · ${w.distanceMiles} mi` : ''} · effort {w.exertion ?? '—'}/10</div>
+                  {w.notes && <p>{w.notes}</p>}
+                </div>
+                <div className="entry-actions">
+                  <button type="button" className="edit-link" disabled={workoutActionBusy}
+                    aria-label={`Edit ${w.type} workout from ${w.date}`}
+                    onClick={() => editingWorkout?.id === w.id ? cancelWorkoutEdit() : beginWorkoutEdit(w)}>
+                    {editingWorkout?.id === w.id ? 'Cancel' : 'Edit'}
+                  </button>
+                  <button type="button" className="danger-link" disabled={workoutActionBusy}
+                    aria-label={`Delete ${w.type} workout from ${w.date}`}
+                    onClick={() => removeWorkout(w)}>Delete</button>
+                </div>
+              </div>
+              {editingWorkout?.id === w.id && <form className="form-grid workout-edit-form" onSubmit={saveWorkoutEdit}>
+                <label>Date<input type="date" value={editingWorkout.date} required disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, date: e.target.value } : d)} /></label>
+                <label>Activity<select value={editingWorkout.type} disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, type: e.target.value } : d)}>
+                  {[...new Set([...types, editingWorkout.type])].map(t => <option key={t}>{t}</option>)}
+                </select></label>
+                <label>Minutes<input type="number" min="1" max="1440" step="1" value={editingWorkout.minutes} required disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, minutes: e.target.value } : d)} /></label>
+                <label>Distance (miles, optional)<input type="number" step="0.01" min="0" value={editingWorkout.distance} disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, distance: e.target.value } : d)} /></label>
+                <label>Effort (1 = easy, 10 = maximal)<input type="range" min="1" max="10" value={editingWorkout.exertion} disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, exertion: e.target.value } : d)} /> <span>{editingWorkout.exertion}/10</span></label>
+                <label className="full">Notes<textarea rows={3} value={editingWorkout.notes} disabled={workoutActionBusy}
+                  onChange={e => setEditingWorkout(d => d ? { ...d, notes: e.target.value } : d)} /></label>
+                <div className="full edit-form-actions">
+                  <button type="submit" disabled={workoutActionBusy}>{workoutActionBusy ? 'Saving…' : 'Save changes'}</button>
+                  <button type="button" className="secondary" disabled={workoutActionBusy} onClick={cancelWorkoutEdit}>Cancel</button>
+                </div>
+              </form>}
+            </article>)}</div>}
+      </section>
     </div> : <div role="tabpanel" id="weight-panel" aria-labelledby="weight-tab">
       <section className="weight-intro">
         <p className="eyebrow">ONE STEP AT A TIME</p>

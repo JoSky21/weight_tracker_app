@@ -30,3 +30,14 @@
 .chart-empty{display:flex;align-items:center;justify-content:center;min-height:240px;background:#f6faf8;border:1px dashed #d4e5df;border-radius:12px;padding:20px;text-align:center;color:#647f79}
 @media(max-width:650px){.weight-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.weight-metrics .metric-tile:last-child{grid-column:1/-1}.metric-tile{padding:15px}.tab-button{font-size:.87rem}}
 @media(max-width:370px){.tab-bar{gap:4px}.tab-button{padding:11px 6px}.goal-heading{align-items:flex-start}.goal-percent{font-size:1.2rem}}
+
+/* Edit and delete actions in Workout history (v3). */
+.entry-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.entry-header>div:first-child{min-width:0;overflow-wrap:anywhere}
+.entry-actions,.edit-form-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.entry-actions button{font-size:.85rem;padding:9px 12px;white-space:nowrap}
+.edit-link{background:#eaf3ef;color:#125c4c;border:1px solid #d3e5de}
+.edit-link:focus-visible,.edit-form-actions button:focus-visible{outline:3px solid #e1a45b;outline-offset:2px}
+.workout-edit-form{margin-top:16px;background:#f5faf8;border:1px solid #dce8e4;border-radius:14px;padding:14px}
+.edit-form-actions{margin-top:4px}
+@media(max-width:580px){.entry-header{flex-direction:column;gap:12px}.entry-actions{width:100%}.entry-actions button{flex:1}.workout-edit-form{padding:12px}}
